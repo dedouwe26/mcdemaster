@@ -14,12 +14,12 @@ jobs:
     steps:
     - name: Create Release
       id: create_release
-    - uses: actions/release-action@v1
+    - uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag: ${{ GITHUB_REF_NAME }}
-        name: Release ${{ github.event.inputs.releaseName }}
+        release_tag: ${{ github.ref }}
+        release_name: Release ${{ github.event.inputs.releaseName }}
         draft: false
         prerelease: false
     - name: Output Release URL File
