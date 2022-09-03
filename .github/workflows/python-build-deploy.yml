@@ -1,6 +1,6 @@
 name: Python Build and Deploy
 
-on:[]
+on:workflow_dispatch
 
 jobs:
 
