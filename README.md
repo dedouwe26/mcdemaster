@@ -1,2 +1,4 @@
 # mcdemaster
-This python program will automaticly convert java minecraft code to a maven project and it also can make a patcher program later on.
+This python program will automaticly convert java minecraft code to a maven project and it also can make a patcher program later on (or not).
+# Thanks to
+[Hube12](https://github.com/hube12/DecompilerMC)

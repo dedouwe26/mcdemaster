@@ -11,6 +11,8 @@ import json
 import os
 import shutil
 from pathlib import Path
+import subprocess
+
 
 import requests
 
@@ -18,9 +20,13 @@ CLIENT = 'client'
 SERVER = 'server'
 
 
-def download(url, path):
-    with open(path, 'w') as file:
-        file.write(requests.get(url).content.decode('utf-8'))
+def download(url, path, byteMode=False):
+    if byteMode:
+        with open(path, 'wb') as file:
+            file.write(requests.get(url).content)
+    else:
+        with open(path, 'w') as file:
+            file.write(requests.get(url).content.decode('utf-8'))
 
 
 def createDirs(dir):
@@ -29,7 +35,6 @@ def createDirs(dir):
 
 
 def createVersionManifest(manifest):
-
     download(manifest, Path('tmp/version_manifest_v2.json'))
     with open(Path('tmp/version_manifest_v2.json'), 'r') as file:
         latestData = json.load(file)
@@ -49,7 +54,7 @@ def getVersionManifest(version):
         exit(1)
 
 
-def getSide(side, version):
+def getSide(version, side):
     if not side == CLIENT and not side == SERVER:
         print('Invalid version side...')
         exit(1)
@@ -71,15 +76,116 @@ def getSide(side, version):
     else:
         print('Mapping file doesnt match up...')
         exit(1)
-    with open(Path(f'versions/{version}/{side}.jar'), 'wb') as file:
-        request=requests.get(sideData['url'],stream=True)
-        request.raw.decode_content=True
-        shutil.copyfileobj(request.raw, file)
+    download(sideData['url'], Path(f'versions/{version}/{side}.jar'), byteMode=True)
     download(sideMappingData['url'], Path(f'versions/{version}/{side}.txt'))
 
 
+def cleanBrackets(line, counter):
+    while '[]' in line:  # get rid of the array brackets while counting them
+        counter += 1
+        line = line[:-2]
+    return line, counter
+
+
+def remapPath(path):
+    remapSymbols = {"int": "I", "double": "D", "boolean": "Z", "float": "F",
+                    "long": "J", "byte": "B", "short": "S", "char": "C", "void": "V"}
+    return "L" + "/".join(path.split(".")) + ";" if path not in remapSymbols else remapSymbols[path]
+
+
+def formatMappings(version, side):
+    with open(Path(f'versions/{version}/{side}.txt'), 'r') as inputFile:
+        file_name = {}
+        for line in inputFile.readlines():
+            if line.startswith('#'):
+                continue
+            deobf_name, obf_name = line.split(' -> ')
+            if not line.startswith('    '):
+                obf_name = obf_name.split(":")[0]
+                file_name[remapPath(deobf_name)] = obf_name
+
+    with open(Path(f'versions/{version}/{side}.txt'), 'r') as inputFile, open(Path(f'versions/{version}/{side}.tsrg'), 'w') as outputFile:
+        for line in inputFile.readlines():
+            if line.startswith('#'):
+                continue
+            deobf_name, obf_name = line.split(' -> ')
+            if line.startswith('    '):
+                obf_name = obf_name.rstrip()
+                deobf_name = deobf_name.lstrip()
+                method_type, method_name = deobf_name.split(" ")
+                method_type = method_type.split(":")[-1]
+                if "(" in method_name and ")" in method_name:
+                    variables = method_name.split('(')[-1].split(')')[0]
+                    function_name = method_name.split('(')[0]
+                    array_length_type = 0
+                    method_type, array_length_type = cleanBrackets(
+                        method_type, array_length_type)
+                    method_type = remapPath(method_type)
+                    method_type = "L" + \
+                        file_name[method_type] + \
+                        ";" if method_type in file_name else method_type
+                    if "." in method_type:
+                        method_type = "/".join(method_type.split("."))
+                    for i in range(array_length_type):
+                        if method_type[-1] == ";":
+                            method_type = "[" + method_type[:-1] + ";"
+                        else:
+                            method_type = "[" + method_type
+
+                    if variables != "":
+                        array_length_variables = [0] * len(variables)
+                        variables = list(variables.split(","))
+                        for i in range(len(variables)):
+                            variables[i], array_length_variables[i] = cleanBrackets(
+                                variables[i], array_length_variables[i])
+                        variables = [remapPath(variable)
+                                     for variable in variables]
+                        variables = [
+                            "L" + file_name[variable] + ";" if variable in file_name else variable for variable in variables]
+                        variables = [
+                            "/".join(variable.split(".")) if "." in variable else variable for variable in variables]
+                        for i in range(len(variables)):
+                            for j in range(array_length_variables[i]):
+                                if variables[i][-1] == ";":
+                                    variables[i] = "[" + \
+                                        variables[i][:-1] + ";"
+                                else:
+                                    variables[i] = "[" + variables[i]
+                        variables = "".join(variables)
+
+                    outputFile.write(
+                        f'\t{obf_name} ({variables}){method_type} {function_name}\n')
+                else:
+                    outputFile.write(f'\t{obf_name} {method_name}\n')
+
+            else:
+                obf_name = obf_name.split(":")[0]
+                outputFile.write(remapPath(obf_name)[
+                                 1:-1] + " " + remapPath(deobf_name)[1:-1] + "\n")
+
+
+def downloadLibraries():
+    os.mkdir(Path('libraries'))
+    download('https://raw.githubusercontent.com/JetBrains/intellij-community/master/LICENSE.txt',
+             Path('libraries/LICENSE-Fernflower.txt'))
+    download('https://raw.githubusercontent.com/md-5/SpecialSource/master/LICENSE',
+             Path('libraries/LICENSE-Specialsource.txt'))
+    download('https://dedouwe.nl/download-data/fernflower.jar',
+             Path('libraries/fernflower.jar'), byteMode=True)
+    download('https://repo.maven.apache.org/maven2/net/md-5/SpecialSource/1.10.0/SpecialSource-1.10.0-shaded.jar',
+             Path('libraries/specialsource.jar'), byteMode=True)
+    print('Downloaded libraries')
+
+def startMapping(version, side):
+    jarIn=Path(f'versions/{version}/{side}.jar')
+    jarOut=Path(f'versions/{version}/{side}-deobf.jar')
+    srgIn=Path(f'versions/{version}/{side}.tsrg')
+    subprocess.run(['java','-jar',Path('libraries/specialsource.jar'),f'--in-jar={jarIn}',f'--out-jar={jarOut}',f'--srg-in={srgIn}'])
+    if Path('versions/{version}/{side}-deobf.jar').exists():
+        print('Deobfuscating failed...')
+        exit(-1)
 def main():
-    manifestV2='https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
+    manifestV2 = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 
     print('-- Welcome to MCDemaster --')
     createDirs(Path('tmp/'))
@@ -91,7 +197,16 @@ def main():
     versionManifestUrl = getVersionManifest(version)['url']
     download(versionManifestUrl, Path(f'versions/{version}/manifest.json'))
     side = input('Client or server side (client/server): ')
-    getSide(side, version)
+    getSide(version, side)
+    print('Starting formatting mappings')
+    formatMappings(version, side)
+    print('succesfull formatted mappings')
+    if not Path('libraries').is_dir():
+        print('Downloading libraries')
+        downloadLibraries()
+    else:
+        print('Libaries already downloaded')
+    startMapping(version,side)
 
 
 if __name__ == "__main__":
