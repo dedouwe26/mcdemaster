@@ -5,13 +5,15 @@ At 24-8-2022 20:25.
 This python program will automaticly convert 
 java minecraft code to a maven project and 
 it also can make a patcher program later on.
+    See: ./README.md
 '''
 import hashlib
 import json
 import os
-import shutil
 from pathlib import Path
+import shutil
 import subprocess
+from zipfile import ZipFile
 
 
 import requests
@@ -33,6 +35,26 @@ def createDirs(dir):
     if not dir.is_dir():
         os.makedirs(dir)
 
+def cleanBrackets(line, counter):
+    while '[]' in line:  # get rid of the array brackets while counting them
+        counter += 1
+        line = line[:-2]
+    return line, counter
+
+
+def remapPath(path):
+    remapSymbols = {"int": "I", "double": "D", "boolean": "Z", "float": "F",
+                    "long": "J", "byte": "B", "short": "S", "char": "C", "void": "V"}
+    return "L" + "/".join(path.split(".")) + ";" if path not in remapSymbols else remapSymbols[path]
+
+def listFiles(dir):
+    list = []
+    for file in os.scandir(dir):
+        if file.is_dir():
+            list += listFiles(Path(dir, file.name))
+        else:
+            list.append(file)
+    return list
 
 def createVersionManifest(manifest):
     download(manifest, Path('tmp/version_manifest_v2.json'))
@@ -76,21 +98,9 @@ def getSide(version, side):
     else:
         print('Mapping file doesnt match up...')
         exit(1)
-    download(sideData['url'], Path(f'versions/{version}/{side}.jar'), byteMode=True)
+    download(sideData['url'], Path(
+        f'versions/{version}/{side}.jar'), byteMode=True)
     download(sideMappingData['url'], Path(f'versions/{version}/{side}.txt'))
-
-
-def cleanBrackets(line, counter):
-    while '[]' in line:  # get rid of the array brackets while counting them
-        counter += 1
-        line = line[:-2]
-    return line, counter
-
-
-def remapPath(path):
-    remapSymbols = {"int": "I", "double": "D", "boolean": "Z", "float": "F",
-                    "long": "J", "byte": "B", "short": "S", "char": "C", "void": "V"}
-    return "L" + "/".join(path.split(".")) + ";" if path not in remapSymbols else remapSymbols[path]
 
 
 def formatMappings(version, side):
@@ -176,14 +186,60 @@ def downloadLibraries():
              Path('libraries/specialsource.jar'), byteMode=True)
     print('Downloaded libraries')
 
+
 def startMapping(version, side):
-    jarIn=Path(f'versions/{version}/{side}.jar')
-    jarOut=Path(f'versions/{version}/{side}-deobf.jar')
-    srgIn=Path(f'versions/{version}/{side}.tsrg')
-    subprocess.run(['java','-jar',Path('libraries/specialsource.jar'),f'--in-jar={jarIn}',f'--out-jar={jarOut}',f'--srg-in={srgIn}'])
-    if Path('versions/{version}/{side}-deobf.jar').exists():
-        print('Deobfuscating failed...')
-        exit(-1)
+    if not Path(f'versions/{version}/{side}-deobf.jar').exists():
+        jarIn = Path(f'versions/{version}/{side}.jar')
+        jarOut = Path(f'versions/{version}/{side}-deobf.jar')
+        srgIn = Path(f'versions/{version}/{side}.tsrg')
+        subprocess.run(['java', '-jar', Path('libraries/specialsource.jar'),
+                       f'--in-jar={jarIn}', f'--out-jar={jarOut}', f'--srg-in={srgIn}'])
+        if Path('versions/{version}/{side}-deobf.jar').exists():
+            print('Deobfuscating failed...')
+            exit(-1)
+
+
+def startDecompile(version, side):
+    if not Path(f'tmp/{version}/{side}-deobf.jar').exists():
+        createDirs(Path(f'tmp/{version}/'))
+        source = Path(f'versions/{version}/{side}-deobf.jar')
+        dest = Path(f'tmp/{version}/')
+        subprocess.run(['java', '-jar', Path('libraries/fernflower.jar'),
+                       source.absolute(), dest.absolute()])
+        if not Path(f'tmp/{version}/{side}-deobf.jar').exists():
+            print('Decompiling failed...')
+            exit(-1)
+
+
+def unzipDecompiled(version, side):
+    createDirs(Path(f'src/{version}/{side}/'))
+    with ZipFile(Path(f'tmp/{version}/{side}-deobf.jar')) as zip:
+        zip.extractall(Path(f'src/{version}/{side}/'))
+    shutil.rmtree(Path(f'tmp/{version}/'))
+
+
+def moveItems(version, side): # Not working!
+    acceptedDirs=[]
+    filePath=Path(f'src/{version}/{side}')
+    for entry in os.scandir(filePath):
+        if entry.is_dir():
+            fileList = listFiles(filePath)
+            isJavainDir=False
+            for file in fileList:
+                if str(file).endswith('.java'):
+                    isJavainDir=True
+                    break
+            if not isJavainDir:
+                continue
+
+            acceptedDirs.append(Path(filePath, entry))
+    print(acceptedDirs)
+
+        
+
+
+            
+
 def main():
     manifestV2 = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
 
@@ -206,8 +262,14 @@ def main():
         downloadLibraries()
     else:
         print('Libaries already downloaded')
-    startMapping(version,side)
+    startMapping(version, side)
+    print('Done mapping')
+    print('Start decompiling!')
+    startDecompile(version, side)
+    print('Starting unzipping')
+    #unzipDecompiled(version, side)
+    print('Starting moving src')
+    moveItems(version, side)
 
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
