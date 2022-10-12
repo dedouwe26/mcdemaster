@@ -35,6 +35,7 @@ def createDirs(dir):
     if not dir.is_dir():
         os.makedirs(dir)
 
+
 def cleanBrackets(line, counter):
     while '[]' in line:  # get rid of the array brackets while counting them
         counter += 1
@@ -47,6 +48,7 @@ def remapPath(path):
                     "long": "J", "byte": "B", "short": "S", "char": "C", "void": "V"}
     return "L" + "/".join(path.split(".")) + ";" if path not in remapSymbols else remapSymbols[path]
 
+
 def listFiles(dir):
     list = []
     for file in os.scandir(dir):
@@ -55,6 +57,7 @@ def listFiles(dir):
         else:
             list.append(file)
     return list
+
 
 def createVersionManifest(manifest):
     download(manifest, Path('tmp/version_manifest_v2.json'))
@@ -215,19 +218,19 @@ def unzipDecompiled(version, side):
     createDirs(Path(f'src/{version}/{side}/'))
     with ZipFile(Path(f'tmp/{version}/{side}-deobf.jar')) as zip:
         zip.extractall(Path(f'src/{version}/{side}/'))
-    shutil.rmtree(Path(f'tmp/{version}/'))
 
 
-def moveItems(version, side): # Not working!
-    acceptedDirs=[]
-    filePath=Path(f'src/{version}/{side}')
+def moveItems(version, side):  # Not working!
+    acceptedDirs = []
+    filePath = Path(f'src/{version}/{side}')
     for entry in os.scandir(filePath):
         if entry.is_dir():
             fileList = listFiles(filePath)
-            isJavainDir=False
+            isJavainDir = False
             for file in fileList:
                 if str(file).endswith('.java'):
-                    isJavainDir=True
+                    isJavainDir = True
+                    print('jav ijn dir')
                     break
             if not isJavainDir:
                 continue
@@ -235,10 +238,6 @@ def moveItems(version, side): # Not working!
             acceptedDirs.append(Path(filePath, entry))
     print(acceptedDirs)
 
-        
-
-
-            
 
 def main():
     manifestV2 = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
@@ -267,9 +266,10 @@ def main():
     print('Start decompiling!')
     startDecompile(version, side)
     print('Starting unzipping')
-    #unzipDecompiled(version, side)
+    unzipDecompiled(version, side)
     print('Starting moving src')
     moveItems(version, side)
+
 
 if __name__ == '__main__':
     main()
