@@ -9,17 +9,63 @@ it also can make a patcher program later on.
 '''
 import hashlib
 import json
+from operator import mod
 import os
 from pathlib import Path
 import shutil
 import subprocess
 from zipfile import ZipFile
 
-
+from diff_match_patch import diff_match_patch
+from packaging import version as vp
 import requests
+
+dmp = diff_match_patch()
 
 CLIENT = 'client'
 SERVER = 'server'
+
+pomXML = """<project xmlns="http://maven.apache.org/POM/4.0.0" 
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <groupId>nl.dedouwe</groupId>
+    <artifactId>MCDemasterInstance</artifactId>
+    <packaging>jar</packaging>
+    <version>1.0.0</version>
+    <name>MCDemaster Instance</name>
+    <description>This is an instance of the MCDemaster project.</description>
+    <url>https://github.com/dedouwe26/mcdemaster</url>
+    <repositories>
+        <repository>
+            <name>Minecraft Libraries</name>
+            <id>minecraft-repo</id>
+            <url>https://libraries.minecraft.net/</url>
+            <layout>default</layout>
+        </repository>
+    </repositories>
+    <dependencies>
+        {deps}
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.10.0</version>
+                <configuration>
+                    <source>{javaVersion}</source>
+                    <target>{javaVersion}</target>
+                </configuration>
+            </plugin>
+        </plugins>
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+        </resources>
+    </build>
+</project>"""
 
 
 def download(url, path, byteMode=False):
@@ -37,7 +83,7 @@ def createDirs(dir):
 
 
 def cleanBrackets(line, counter):
-    while '[]' in line:  # get rid of the array brackets while counting them
+    while '[]' in line:
         counter += 1
         line = line[:-2]
     return line, counter
@@ -215,34 +261,114 @@ def startDecompile(version, side):
 
 
 def unzipDecompiled(version, side):
-    createDirs(Path(f'src/{version}/{side}/'))
-    with ZipFile(Path(f'tmp/{version}/{side}-deobf.jar')) as zip:
-        zip.extractall(Path(f'src/{version}/{side}/'))
+    if not Path(f'src/{version}/{side}/').exists():
+        createDirs(Path(f'src/{version}/{side}/'))
+        with ZipFile(Path(f'tmp/{version}/{side}-deobf.jar')) as zip:
+            zip.extractall(Path(f'src/{version}/{side}/'))
+        shutil.rmtree(Path(f'src/{version}/{side}/META-INF/'))
 
 
-def moveItems(version, side):  # Not working!
-    acceptedDirs = []
-    filePath = Path(f'src/{version}/{side}')
-    for entry in os.scandir(filePath):
+def moveItems(version, side):
+    if Path(f'mc/{version}/{side}/src/main/java/').is_dir():
+        return
+    createDirs(Path(f'mc/{version}/{side}/src/main/java/'))
+    for entry in os.scandir(Path(f'./src/{version}/{side}')):
         if entry.is_dir():
-            fileList = listFiles(filePath)
-            isJavainDir = False
+            fileList = listFiles(Path(entry))
+            javaInDir = False
             for file in fileList:
-                if str(file).endswith('.java'):
-                    isJavainDir = True
-                    print('jav ijn dir')
+                if file.name.endswith('.java'):
+                    try:
+                        shutil.copytree(Path(entry), Path(
+                            f'./mc/{version}/{side}/src/main/java/{entry.name}/'))
+                    except FileExistsError as e:
+                        print(e.filename,
+                              ' already exists, continuing and deleting...')
+                        shutil.rmtree(
+                            Path(f'mc/{version}/{side}/src/main/java/{entry.name}/'))
+                    javaInDir = True
                     break
-            if not isJavainDir:
+            if not javaInDir:
+                try:
+                    shutil.copytree(Path(entry), Path(
+                        f'./mc/{version}/{side}/src/main/resources/{entry.name}/'))
+                except FileExistsError as e:
+                    print(e.filename, ' already exists, continuing and deleting...')
+                    shutil.rmtree(
+                        Path(f'mc/{version}/{side}/src/main/resources/{entry.name}/'))
                 continue
 
-            acceptedDirs.append(Path(filePath, entry))
-    print(acceptedDirs)
+        else:
+            shutil.copy(Path(entry), Path(
+                f'./mc/{version}/{side}/src/main/resources/{entry.name}'))
 
 
-def main():
+def makePom(version, side):
+    with open(Path(f'versions/{version}/manifest.json'), 'r') as manifest:
+        libraries = json.load(manifest)['libraries']
+        libsUsed = {}
+        for lib in libraries:
+            if lib['name'].split(':')[0]+':'+lib['name'].split(':')[1] in libsUsed:
+                if vp.parse(str(lib['name']).split(':')[2]) > vp.parse(libsUsed[lib['name'].split(':')[0]+':'+lib['name'].split(':')[1]]):
+                    libsUsed[lib['name'][0]+':'+lib['name']
+                             [1]] = str(lib['name']).split(':')[2]
+            else:
+                libsUsed[lib['name'].split(
+                    ':')[0]+':'+lib['name'].split(':')[1]] = str(lib['name']).split(':')[2]
+        deps = ''
+        for name in libsUsed:
+            libVersion=libsUsed[name]
+            text = f"""<dependency>
+            <groupId>{name.split(':')[0]}</groupId>
+            <artifactId>{name.split(':')[1]}</artifactId>
+            <version>{libVersion}</version>
+            <scope>runtime</scope>
+        </dependency>"""
+            deps += text
+        # needs javaVersion, deps: deps=deps,javaVersion=... in manifest.json
+        with open(Path(f'versions/{version}/manifest.json'), 'r') as manifest:
+            endResult=pomXML.format(deps=deps, javaVersion=str(json.load(manifest)['javaVersion']['majorVersion']))
+        with open(Path(f'mc/{version}/{side}/pom.xml'),'w') as pom:
+            pom.write(endResult)
+
+def clean(bigClean):
+    if bigClean=='y':
+        shutil.rmtree(Path('versions/'))
+        shutil.rmtree(Path('libraries/'))
+    shutil.rmtree(Path('tmp/'))
+    
+def patchDir(version, side, dir, target):
+    for file in os.scandir(dir):
+        if file.is_dir():
+            createDirs(Path('patcher/patches/', target, file.name))
+            patchDir(version, side, Path(dir, file.name),Path(dir, target))
+        else:
+            if Path('src/{version}/{side}/',target, file.name).exists():
+                with open(Path('patcher/patches/',target,file.name+'.patch'),'w') as dest:
+                    with open(Path(f'src/{version}/{side}/', target, file.name), 'r') as old:
+                        with open(Path(dir, file.name), 'r') as new:
+                            dest.write(dmp.patch_toText(dmp.patch_make(old.read(), new.read())))
+            elif not Path('src/{version}/{side}/',target, file.name).exists():
+                with open(Path('patcher/patches/',target,file.name),'w') as dest:
+                    with open(Path(dir, file.name), 'r') as new:
+                        dest.write(new.read())
+                
+def patchResources(version, side, dir, target):
+        for file in os.scandir(dir):
+            if file.is_dir():
+                createDirs(Path('patcher/patches/', target, file.name))
+                patchResources(version, side, Path(dir, file.name),Path(dir, target))
+            else:
+                if Path('src/{version}/{side}/',target,file.name).exists():
+                    pass
+                    # if same file then continue
+                # put in patches folder at loc
+                
+
+def main(without=False):
     manifestV2 = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
-
-    print('-- Welcome to MCDemaster --')
+    if not without:
+        print('-- Welcome to MCDemaster --')
     createDirs(Path('tmp/'))
     createDirs(Path('versions/'))
     release, snapshot = createVersionManifest(manifestV2)
@@ -263,13 +389,50 @@ def main():
         print('Libaries already downloaded')
     startMapping(version, side)
     print('Done mapping')
-    print('Start decompiling!')
+    print('Start decompiling! *This can take a while!*')
     startDecompile(version, side)
     print('Starting unzipping')
     unzipDecompiled(version, side)
     print('Starting moving src')
     moveItems(version, side)
+    print('Done moving')
+    print('Making pom.xml')
+    makePom(version, side)
+    print('Now cleaning up')
+    # clean(input('Big clean (y/N):'))
+    input('Done, Maven project in mc/, enter to exit...')
+
+
+def altOptions():
+    print('-- Welcome to MCDemaster --')
+    print('Project detected, here are the options for the projects:')
+    print('(1): Make Patcher program.\n(2): Choose another version.')
+    option = input('Option: ')
+    if option=='2':
+        main(without=True)
+        return
+    createDirs(Path('patcher/'))
+    if len(os.listdir(Path('mc')))==1:
+        version=os.listdir(Path('mc'))[0]
+        print(f'Version {version} detected.')
+    else:
+        version=input('Choose a version to make a patcher from.\nVersion: ')
+    if len(os.listdir(Path('mc/',version)))==1:
+        side=os.listdir(Path('mc/',version))[0]
+        print(f'{side} side detected.')
+    else:
+        version=input('Choose a side to make a patcher from.\nSide (client/server): ')
+    print('Making patcher file')
+    with open(Path('patcher/patcher.py'),'w') as patcherFile:
+        pass
+        # patcherFile.write(patcher.format(version, side))
+    print('Making patches')
+    patchDir(Path('mc/{version}/{side}/src/main/java/'),'') #TODO
+        
 
 
 if __name__ == '__main__':
-    main()
+    if Path('mc/').is_dir():
+        altOptions()
+    else:
+        main()
