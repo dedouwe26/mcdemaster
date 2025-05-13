@@ -1,4 +1,4 @@
 pyinstaller==5.13.1
-requests==2.31.0
+requests==2.32.2
 packaging==21.3
 diff-match-patch==20200713
